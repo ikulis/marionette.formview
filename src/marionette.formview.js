@@ -4,12 +4,12 @@
   "use strict";
   if (typeof define === 'function' && define.amd) {
     // AMD. Register as an anonymous module.
-    define(['marionette','jquery','underscore'], factory);
+    define(['backbone','marionette','jquery','underscore'], factory);
   } else {
     // Browser globals
-    root.Marionette.FormView = factory(root.Marionette,root.jQuery,root._);
+    root.Marionette.FormView = factory(root.Backbone,root.Marionette,root.jQuery,root._);
   }
-}(this, function (Marionette,$,_) {
+}(this, function (Backbone,Marionette,$,_) {
   "use strict";
 
   /**
@@ -28,22 +28,31 @@
 
     fields  : {},
 
-    constructor : function(){
-      Marionette.ItemView.prototype.constructor.apply(this, arguments);
+    initialize : function(options){
+      options = options || {} ;
 
       //Allow Passing In Fields by extending with a fields hash
       if (!this.fields) throw new Error("Fields Must Be Provided");
 
-      if (!this.model) this.model = new Backbone.Model();
-
+        // set up model
+      this.model = options.model || this.model;
+      if (!this.model) {
+          this.model = new Backbone.Model();
+      }
       this.listenTo(this.model, 'change', this.changeFieldVal,this);
+
+        // set up data
+      this.data = options.data || this.data;
       if (this.data) this.model.set(this.data);
 
       //Attach Events to preexisting elements if we don't have a template
-      if (!this.template) this.runInitializers();
+      this.template = options.template || this.template;
+      if (!this.template) {
+          this.runInitializers();
+      }
       this.on('item:rendered',this.runInitializers, this);
+      this.on('render',this.runInitializers, this);
     },
-
     changeFieldVal : function(model, fields) {
       if(!_.isEmpty(fields) && fields.changes) {
         var modelProperty = Object.keys(fields.changes);
@@ -93,12 +102,31 @@
     handleFieldEvent : function(evt, eventName) {
       var el = evt.target || evt.srcElement,
         field = $(el).attr('data-field'),
-        fieldOptions = this.fields[field];
+        fieldOptions = this.fields[field],
+        isValid = true;
 
-      if (fieldOptions && fieldOptions.validateOn === eventName) {
-        var errors = this.validateField(field);
-        if (!_.isEmpty(errors) && _.isFunction(this.onValidationFail)) this.onValidationFail(errors);
+      if (fieldOptions.validateOn ) {
+        // validation on
+        if ( fieldOptions.validateOn === eventName ) {
+          // validate
+          var errors = this.validateField(field),
+              isValid = _.isEmpty(errors)
+          ;
+          if (!isValid && _.isFunction(this.onValidationFail)){
+              this.onValidationFail(errors);
+          }
+          if (isValid){
+            this.model.set(field, $(el).val());
+            if ( _.isFunction(this.onValidationOk) ) {
+                this.onValidationOk(field);
+            }
+          }
+        }
+      } else {
+          // no validation just save
+          this.model.set(field, $(el).val());
       }
+      return isValid;
     },
 
     validate : function () {
@@ -116,31 +144,35 @@
       var fieldOptions = this.fields[field],
         validations = fieldOptions && fieldOptions.validations ? fieldOptions.validations : {},
         fieldErrors = [],
+        allowEmpty = fieldOptions.allowEmpty,
         isValid = true;
 
       var val = this.inputVal(field);
+      if( allowEmpty && val == '' ){
+        // ok
+      } else {
+        if (fieldOptions.required) {
+          isValid = this.validateRule(val,'required');
+          var errorMessage = typeof fieldOptions.required === 'string' ? fieldOptions.required : 'This field is required';
+          if (!isValid) fieldErrors.push(errorMessage);
+        }
 
-      if (fieldOptions.required) {
-        isValid = this.validateRule(val,'required');
-        var errorMessage = typeof fieldOptions.required === 'string' ? fieldOptions.required : 'This field is required';
-        if (!isValid) fieldErrors.push(errorMessage);
-      }
+        // Don't bother with other validations if failed 'required' already
+        if (isValid && validations) {
+          _.each(validations, function (errorMsg, validateWith) {
+            isValid = this.validateRule(val, validateWith);
+            if (!isValid) fieldErrors.push(errorMsg);
+          },this);
+        }
 
-      // Don't bother with other validations if failed 'required' already
-      if (isValid && validations) {
-        _.each(validations, function (errorMsg, validateWith) {
-          isValid = this.validateRule(val, validateWith);
-          if (!isValid) fieldErrors.push(errorMsg);
-        },this);
-      }
-
-      if (!_.isEmpty(fieldErrors)) {
-        var errorObject = {
-          field : field,
-          el : this.fields[field].el,
-          error : fieldErrors
-        };
-        return errorObject;
+        if (!_.isEmpty(fieldErrors)) {
+          var errorObject = {
+            field : field,
+            el : this.fields[field].el,
+            error : fieldErrors
+          };
+          return errorObject;
+        }
       }
     },
 
@@ -276,7 +308,41 @@
       //RFC 2822
       email : /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?$/i,
       alpha : /^[a-zA-Z]+$/,
-      alphanum : /^[a-zA-Z0-9]+$/
+      alphanum : /^[a-zA-Z0-9]+$/,
+      url:  new RegExp(
+        "^" +
+                // protocol identifier
+            "(?:(?:https?|ftp)://)" +
+            // user:pass authentication
+            "(?:\\S+(?::\\S*)?@)?" +
+            "(?:" +
+            // IP address exclusion
+            // private & local networks
+            "(?!(?:10|127)(?:\\.\\d{1,3}){3})" +
+            "(?!(?:169\\.254|192\\.168)(?:\\.\\d{1,3}){2})" +
+            "(?!172\\.(?:1[6-9]|2\\d|3[0-1])(?:\\.\\d{1,3}){2})" +
+            // IP address dotted notation octets
+            // excludes loopback network 0.0.0.0
+            // excludes reserved space >= 224.0.0.0
+            // excludes network & broacast addresses
+            // (first & last IP address of each class)
+            "(?:[1-9]\\d?|1\\d\\d|2[01]\\d|22[0-3])" +
+            "(?:\\.(?:1?\\d{1,2}|2[0-4]\\d|25[0-5])){2}" +
+            "(?:\\.(?:[1-9]\\d?|1\\d\\d|2[0-4]\\d|25[0-4]))" +
+            "|" +
+            // host name
+            "(?:(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)" +
+            // domain name
+            "(?:\\.(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)*" +
+            // TLD identifier
+            "(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))" +
+            ")" +
+            // port number
+            "(?::\\d{2,5})?" +
+            // resource path
+            "(?:/\\S*)?" +
+            "$", "i"
+    )
     },
 
     validate : function(validator, val, options) {
@@ -313,6 +379,10 @@
 
     email : function(val) {
       return FormValidator.regex.email.test(val);
+    },
+
+    url : function(val) {
+      return FormValidator.regex.url.test(val);
     },
 
     required : function(val) {
